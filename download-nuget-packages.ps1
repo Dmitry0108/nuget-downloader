@@ -43,6 +43,28 @@ function Get-LatestPackageVersion {
     return $null
 }
 
+function Move-NupkgFiles {
+    # Find all .nupkg files in subdirectories
+    $nupkgFiles = Get-ChildItem -Path $outputDirectory -Recurse -Filter "*.nupkg"
+    
+    foreach ($file in $nupkgFiles) {
+        $destination = Join-Path -Path $outputDirectory -ChildPath $file.Name
+        
+        # Skip if already in target location
+        if ($file.FullName -eq $destination) { continue }
+        
+        # Move to output directory
+        Move-Item -Path $file.FullName -Destination $destination -Force -ErrorAction SilentlyContinue
+        
+        # Clean up empty parent directory
+        $parentDir = $file.Directory
+        if ($parentDir.GetFiles().Count -eq 0 -and $parentDir.GetDirectories().Count -eq 0) {
+            Remove-Item -Path $parentDir.FullName -Force -Recurse -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+
 # Function to download a specific package version
 function Download-PackageVersion {
     param (
@@ -53,26 +75,10 @@ function Download-PackageVersion {
     Write-Host "Downloading package: $packageName (Version: $version)"
     
     # Download the package
-    mono /usr/local/bin/nuget.exe install $packageName `
-        -OutputDirectory $outputDirectory `
-        -Version $version `
-        -Prerelease $Prerelease
+    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $outputDirectory -Version $version Prerelease:$Prerelease
     
-    # Move .nupkg file to root
-    $nupkgFile = Get-ChildItem -Path $outputDirectory -Recurse -Filter "*.nupkg" | 
-                 Where-Object { $_.Name -match "^$packageName\.\d" } |
-                 Select-Object -First 1
-    
-    if ($nupkgFile) {
-        Move-Item -Path $nupkgFile.FullName -Destination $outputDirectory -Force
-        
-        # Clean up version-specific directory
-        $packageDir = Get-ChildItem -Path $outputDirectory -Directory |
-                     Where-Object { $_.Name -match "^$packageName\.\d" }
-        if ($packageDir) {
-            Remove-Item -Path $packageDir.FullName -Recurse -Force
-        }
-    }
+    # Move all .nupkg files to root output directory
+    Move-NupkgFiles
 }
 
 # Main execution
