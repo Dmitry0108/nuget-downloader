@@ -28,7 +28,7 @@ function Get-LatestPackageVersion {
     )
     
     # Get all matching packages
-    $listOutput = mono /usr/local/bin/nuget.exe list $packageName -Prerelease $Prerelease
+    $listOutput = mono /usr/local/bin/nuget.exe list $packageName
     
     # Parse output to find our exact package
     $packageLine = $listOutput -split "`n" | 
@@ -75,8 +75,7 @@ function Download-PackageVersion {
     Write-Host "Downloading package: $packageName (Version: $version)"
     
     # Download the package
-    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $outputDirectory -Version $version Prerelease:$Prerelease
-    
+    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $outputDirectory -Version $version
     # Move all .nupkg files to root output directory
     Move-NupkgFiles
 }
