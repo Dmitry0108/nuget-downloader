@@ -7,6 +7,7 @@ param (
 # Path configurations
 $packagesFilePath = "packages.txt"
 $outputDirectory = "./DownloadedPackages"
+$tempPath = "./temp"
 $metadataFilePath = "$outputDirectory/downloaded-versions.json"
 
 # Ensure output directory exists
@@ -45,7 +46,7 @@ function Get-LatestPackageVersion {
 
 function Move-NupkgFiles {
     # Find all .nupkg files in subdirectories
-    $nupkgFiles = Get-ChildItem -Path $outputDirectory -Recurse -Filter "*.nupkg"
+    $nupkgFiles = Get-ChildItem -Path $tempPath -Recurse -Filter "*.nupkg"
     
     foreach ($file in $nupkgFiles) {
         $destination = Join-Path -Path $outputDirectory -ChildPath $file.Name
@@ -75,7 +76,7 @@ function Download-PackageVersion {
     Write-Host "Downloading package: $packageName (Version: $version)"
     
     # Download the package
-    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $outputDirectory -Version $version
+    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $tempPath -Version $version
     # Move all .nupkg files to root output directory
     Move-NupkgFiles
 }
