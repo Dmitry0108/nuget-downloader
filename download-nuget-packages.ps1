@@ -104,6 +104,9 @@ try {
         Download-PackageVersion -packageName $package -version $latestVersion
         $downloadedVersions[$package] = $latestVersion
     }
+
+    # Clean temp directory
+    Remove-Item -Path $tempPath -Force -Recurse -ErrorAction SilentlyContinue
     
     # Save metadata
     $downloadedVersions | ConvertTo-Json | Out-File -FilePath $metadataFilePath
