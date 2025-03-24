@@ -1,101 +1,127 @@
 param (
-    [switch]$ZipOutput = $false,      # Switch to control zipping the output folder
-    [switch]$Prerelease = $false,     # Switch to include prerelease versions
-    [string]$CronSchedule = $null    # Cron schedule for running the script periodically
+    [switch]$ZipOutput = $false,
+    [switch]$Prerelease = $false,
+    [string]$CronSchedule = $null
 )
 
-# Define the path to the text file containing the list of NuGet packages
+# Path configurations
 $packagesFilePath = "packages.txt"
-
-# Define the output directory where the .nupkg files will be saved
 $outputDirectory = "./DownloadedPackages"
-
-# Define the metadata file to store downloaded versions
 $metadataFilePath = "$outputDirectory/downloaded-versions.json"
 
-# Ensure the output directory exists
+# Ensure output directory exists
 if (-not (Test-Path $outputDirectory)) {
-    New-Item -ItemType Directory -Path $outputDirectory
+    New-Item -ItemType Directory -Path $outputDirectory | Out-Null
 }
 
-# Load or initialize the metadata file
-if (Test-Path $metadataFilePath)) {
-    $downloadedVersions = Get-Content -Path $metadataFilePath | ConvertFrom-Json
+# Load or initialize metadata
+$downloadedVersions = if (Test-Path $metadataFilePath) {
+    Get-Content -Path $metadataFilePath | ConvertFrom-Json -AsHashtable
 } else {
-    $downloadedVersions = @{}
+    @{}
 }
 
-# Function to get the latest version of a package
+# Function to get the latest version of a specific package
 function Get-LatestPackageVersion {
     param (
         [string]$packageName
     )
-    $versions = mono /usr/local/bin/nuget.exe list $packageName -Prerelease:$Prerelease
-    $latestVersion = ($versions -split " ")[1]  # Extract the version from the output
-    return $latestVersion
+    
+    # Get all matching packages
+    $listOutput = mono /usr/local/bin/nuget.exe list $packageName -Prerelease:$Prerelease
+    
+    # Parse output to find our exact package
+    $packageLine = $listOutput -split "`n" | 
+                   Where-Object { $_ -match "^$packageName\s" } |
+                   Select-Object -First 1
+    
+    if ($packageLine) {
+        return ($packageLine -split '\s+')[1]  # Extract version
+    }
+    
+    Write-Error "Package '$packageName' not found"
+    return $null
 }
 
-# Function to download a specific version of a package
+# Function to download a specific package version
 function Download-PackageVersion {
     param (
         [string]$packageName,
         [string]$version
     )
+    
     Write-Host "Downloading package: $packageName (Version: $version)"
-    mono /usr/local/bin/nuget.exe install $packageName -OutputDirectory $outputDirectory -Version $version -Prerelease:$Prerelease
-
-    # Move the .nupkg file to the root of the output directory
-    $nupkgFile = Get-ChildItem -Path $outputDirectory -Recurse -Filter "*.nupkg" | Select-Object -First 1
+    
+    # Download the package
+    mono /usr/local/bin/nuget.exe install $packageName `
+        -OutputDirectory $outputDirectory `
+        -Version $version `
+        -Prerelease:$Prerelease
+    
+    # Move .nupkg file to root
+    $nupkgFile = Get-ChildItem -Path $outputDirectory -Recurse -Filter "*.nupkg" | 
+                 Where-Object { $_.Name -match "^$packageName\.\d" } |
+                 Select-Object -First 1
+    
     if ($nupkgFile) {
         Move-Item -Path $nupkgFile.FullName -Destination $outputDirectory -Force
-    }
-
-    # Clean up the package-specific directory created by nuget.exe
-    $packageDirectory = Get-ChildItem -Path $outputDirectory -Directory | Where-Object { $_.Name -like "$packageName.*" }
-    if ($packageDirectory) {
-        Remove-Item -Path $packageDirectory.FullName -Recurse -Force
-    }
-}
-
-# Read the list of packages from the text file
-$packages = Get-Content -Path $packagesFilePath
-
-# Loop through each package and download the latest version if it's not already downloaded
-foreach ($package in $packages) {
-    $latestVersion = Get-LatestPackageVersion -packageName $package
-
-    if ($downloadedVersions.$package -eq $latestVersion) {
-        Write-Host "Package $package (Version: $latestVersion) is already downloaded. Skipping."
-    } else {
-        Download-PackageVersion -packageName $package -version $latestVersion
-        $downloadedVersions.$package = $latestVersion
+        
+        # Clean up version-specific directory
+        $packageDir = Get-ChildItem -Path $outputDirectory -Directory |
+                     Where-Object { $_.Name -match "^$packageName\.\d" }
+        if ($packageDir) {
+            Remove-Item -Path $packageDir.FullName -Recurse -Force
+        }
     }
 }
 
-# Save the updated metadata file
-$downloadedVersions | ConvertTo-Json | Out-File -FilePath $metadataFilePath -Encoding ASCII
-
-Write-Host "All .nupkg files have been downloaded to $outputDirectory"
-
-# Zip the output folder if the -ZipOutput switch is provided
-if ($ZipOutput) {
-    $zipFilePath = "./DownloadedPackages.zip"
-    Write-Host "Zipping the output folder to $zipFilePath"
-    Compress-Archive -Path $outputDirectory -DestinationPath $zipFilePath -Force
-    Write-Host "Output folder has been zipped to $zipFilePath"
-}
-
-# If a cron schedule is provided, set up a cron job
-if ($CronSchedule) {
-    Write-Host "Setting up cron job with schedule: $CronSchedule"
+# Main execution
+try {
+    $packages = Get-Content -Path $packagesFilePath
     
-    # Create a cron job file
-    $cronJob = "$CronSchedule pwsh /app/download-nuget-packages.ps1 -ZipOutput:`$$($ZipOutput.ToString().ToLower()) -Prerelease:`$$($Prerelease.ToString().ToLower())"
-    $cronJob | Out-File -FilePath /etc/cron.d/nuget-downloader -Encoding ASCII
-
-    # Give execution permissions to the cron job file
-    chmod 0644 /etc/cron.d/nuget-downloader
-
-    # Start the cron service
-    crond -f
+    foreach ($package in $packages) {
+        $package = $package.Trim()
+        if ([string]::IsNullOrWhiteSpace($package)) { continue }
+        
+        $latestVersion = Get-LatestPackageVersion -packageName $package
+        
+        if (-not $latestVersion) {
+            Write-Warning "Skipping package '$package' (not found)"
+            continue
+        }
+        
+        if ($downloadedVersions[$package] -eq $latestVersion) {
+            Write-Host "Package $package (Version: $latestVersion) already downloaded. Skipping."
+            continue
+        }
+        
+        Download-PackageVersion -packageName $package -version $latestVersion
+        $downloadedVersions[$package] = $latestVersion
+    }
+    
+    # Save metadata
+    $downloadedVersions | ConvertTo-Json | Out-File -FilePath $metadataFilePath
+    
+    # Zip output if requested
+    if ($ZipOutput) {
+        $zipPath = "./DownloadedPackages.zip"
+        Write-Host "Creating zip archive: $zipPath"
+        Compress-Archive -Path $outputDirectory -DestinationPath $zipPath -Force
+    }
+    
+    # Handle cron scheduling
+    if ($CronSchedule) {
+        Write-Host "Setting up cron job with schedule: $CronSchedule"
+        $cronJob = "$CronSchedule pwsh /app/download-nuget-packages.ps1"
+        if ($ZipOutput) { $cronJob += " -ZipOutput" }
+        if ($Prerelease) { $cronJob += " -Prerelease" }
+        
+        $cronJob | Out-File -FilePath /etc/cron.d/nuget-downloader -Encoding ASCII
+        chmod 0644 /etc/cron.d/nuget-downloader
+        crond -f
+    }
+}
+catch {
+    Write-Error "Error occurred: $_"
+    exit 1
 }
